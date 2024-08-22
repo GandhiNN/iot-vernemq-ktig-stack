@@ -1,0 +1,183 @@
+# version: "3.8"
+services:
+  vernemq:
+    image: vernemq/vernemq
+    healthcheck:
+      test: curl --fail http://localhost:8888/health || exit 1
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    container_name: vernemq
+    restart: always
+    environment:
+      - DOCKER_VERNEMQ_ALLOW_ANONYMOUS=on
+      - DOCKER_VERNEMQ_ACCEPT_EULA=yes
+    ports:
+      - 1883:1883
+      - 8888:8888
+    expose: 
+      - 1883
+    volumes:
+      - vernemq-data:/var/lib/vernemq
+    networks:
+      - iot
+
+  zookeeper:
+    image: bitnami/zookeeper:latest
+    container_name: zookeeper
+    ports:
+      - 2181:2181
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    networks:
+      - iot
+
+  kafka:
+    restart: always
+    image: bitnami/kafka:3.3.1
+    container_name: kafka
+    ports: 
+      - 9092:9092
+      - 9093:9093
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=CLIENT://:9092,EXTERNAL://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=CLIENT://kafka:9092,EXTERNAL://localhost:9093
+      - KAFKA_INTER_BROKER_LISTENER_NAME=CLIENT
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    networks:
+      - iot
+    depends_on:
+      - vernemq
+      - zookeeper
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    container_name: kafdrop
+    ports:
+      - 9100:9100
+    environment:
+      - KAFKA_BROKERCONNECT=kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - iot      
+
+  influxdb:
+    image: influxdb:1.8
+    container_name: influxdb
+    restart: always
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb
+    networks:
+      - iot
+    depends_on:
+      - vernemq
+      - kafka
+
+  telegraf-vernemq-to-kafka:
+    image: telegraf
+    container_name: telegraf-vernemq-to-kafka
+    restart: always
+    volumes:
+      - ./conf/telegraf/telegraf-vernemq-to-kafka.conf:/etc/telegraf/telegraf.conf:ro
+    depends_on:
+      - vernemq
+      - kafka
+    networks:
+      - iot
+
+  telegraf-kafka-to-influx:
+    image: telegraf
+    container_name: telegraf-kafka-to-influx
+    restart: always
+    volumes:
+      - ./conf/telegraf/telegraf-kafka-to-influx.conf:/etc/telegraf/telegraf.conf:ro
+    depends_on:
+      - influxdb
+      - kafka
+    networks:
+      - iot
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: always
+    ports:
+      - 3000:3000
+    volumes:
+      - ./conf/grafana/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana
+    depends_on:
+      - influxdb
+      - prometheus
+    networks:
+      - iot
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    restart: always
+    container_name: cadvisor
+    ports:
+      - 8080:8080
+    networks:
+      - iot
+    volumes:
+      - "/:/rootfs"
+      - "/var/run:/var/run"
+      - "/sys:/sys"
+      - "/var/lib/docker/:/var/lib/docker"
+      - "/dev/disk/:/dev/disk"
+    depends_on:
+      - vernemq
+      - kafdrop
+      - kafka
+      - zookeeper
+      - influxdb
+      - telegraf-kafka-to-influx
+      - telegraf-vernemq-to-kafka
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    container_name: prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - ./conf/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    privileged: true
+    networks:
+      - iot
+    depends_on:
+      - cadvisor
+    
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    expose:
+      - 9100
+    networks:
+      - iot
+
+networks:
+  iot:
+
+volumes:
+  influxdb-data:
+  grafana-data:
+  vernemq-data:
