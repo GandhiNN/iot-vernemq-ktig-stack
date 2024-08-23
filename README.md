@@ -1,4 +1,4 @@
-# iot-vernemq-ktig-stack"
+# iot-vernemq-ktig-stack
 With MQTT traffic generator written in Python and Rust
 
 ## Application Access
