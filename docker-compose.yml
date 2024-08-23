@@ -17,6 +17,7 @@ services:
       - 8888:8888
     expose: 
       - 1883
+    privileged: true
     volumes:
       - vernemq-data:/var/lib/vernemq
     networks:
@@ -102,6 +103,11 @@ services:
       - kafka
     networks:
       - iot
+    healthcheck:
+      test: curl --fail http://influxdb:8086/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   grafana:
     image: grafana/grafana:latest
